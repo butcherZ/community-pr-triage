@@ -1,6 +1,6 @@
 import { LinearClient } from '@linear/sdk';
-import { LINEAR_TEAM_ID, LINEAR_STATUSES, LINEAR_LABELS } from './config.js';
-import type { ScoredPR, PriorityTier } from './types.js';
+import { LINEAR_TEAM_ID, LINEAR_STATUSES, LINEAR_LABELS, LINEAR_TRIAGE_LABELS } from './config.js';
+import type { ScoredPR, PriorityTier, ComplexityTier } from './types.js';
 
 // --- Pure helpers (unit-testable) ---
 
@@ -18,6 +18,29 @@ export function mapLabelsToLinear(ghLabels: string[]): string[] {
   return ghLabels
     .map((l) => LINEAR_LABELS[l])
     .filter((id): id is string => id !== undefined);
+}
+
+export function buildLabelIds(scored: ScoredPR): string[] {
+  const ids: string[] = [];
+
+  // PR type labels (fix, feature, etc.)
+  ids.push(...mapLabelsToLinear(scored.pr.labels));
+
+  // Priority tier
+  ids.push(LINEAR_TRIAGE_LABELS.priority[scored.priority]);
+
+  // Complexity
+  ids.push(LINEAR_TRIAGE_LABELS.complexity[scored.complexity]);
+
+  // CI status
+  ids.push(LINEAR_TRIAGE_LABELS.ci[scored.pr.ciStatus]);
+
+  // Quick win
+  if (scored.isQuickWin) {
+    ids.push(LINEAR_TRIAGE_LABELS.quickWin);
+  }
+
+  return ids;
 }
 
 export function buildDescription(scored: ScoredPR): string {
@@ -109,7 +132,7 @@ export async function syncToLinear(scoredPRs: ScoredPR[]): Promise<{
   for (const scored of scoredPRs) {
     const existing = issueByPR.get(scored.pr.number);
     const linearPriority = mapPriorityToLinear(scored.priority);
-    const labelIds = mapLabelsToLinear(scored.pr.labels);
+    const labelIds = buildLabelIds(scored);
     const description = buildDescription(scored);
 
     if (existing) {
