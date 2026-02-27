@@ -1,10 +1,21 @@
 import 'dotenv/config';
+import { createInterface } from 'node:readline';
 import { AREA_TIERS } from './config.js';
 import { fetchInternalAuthors, fetchCommunityPRs, fetchIssue, parseIssueRefs, parseLinkedIssueData, extractArea } from './fetcher.js';
 import { calculateValue, calculateComplexity, calculatePriority, isQuickWin } from './scorer.js';
 import { syncToLinear } from './syncer.js';
-import { printReport } from './reporter.js';
+import { printReport, generateMarkdownReport } from './reporter.js';
 import type { ScoredPR, LinkedIssueData } from './types.js';
+
+function confirm(question: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.trim().toLowerCase() === 'y' || answer.trim().toLowerCase() === 'yes');
+    });
+  });
+}
 
 function getAreaTier(area: string): string {
   for (const [tier, areas] of Object.entries(AREA_TIERS)) {
@@ -62,9 +73,19 @@ async function main() {
   scoredPRs.sort((a, b) => b.value.total - a.value.total);
   printReport(scoredPRs);
 
+  // Generate markdown report
+  const reportPath = `reports/triage-${new Date().toISOString().split('T')[0]}.md`;
+  generateMarkdownReport(scoredPRs, reportPath);
+  console.log(`Markdown report saved to: ${reportPath}\n`);
+
   if (dryRun) {
     console.log('[DRY RUN] Skipping Linear sync.\n');
   } else {
+    const confirmed = await confirm(`About to sync ${scoredPRs.length} PRs to Linear. Proceed? (y/N) `);
+    if (!confirmed) {
+      console.log('Sync canceled.\n');
+      return;
+    }
     console.log('Syncing to Linear...');
     const stats = await syncToLinear(scoredPRs);
     console.log(`Linear sync complete: ${stats.created} created, ${stats.updated} updated, ${stats.closed} closed, ${stats.relationsCreated} relations linked.\n`);
