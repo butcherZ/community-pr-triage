@@ -58,17 +58,16 @@ export function fetchInternalAuthors(): Set<string> {
   return new Set(logins);
 }
 
-export async function fetchCommunityPRs(internalAuthors: Set<string>): Promise<GitHubPR[]> {
+export function fetchCommunityPRs(internalAuthors: Set<string>): GitHubPR[] {
   const fields = [
     'number', 'title', 'author', 'body', 'labels', 'additions', 'deletions',
     'changedFiles', 'createdAt', 'state', 'isDraft', 'mergedAt', 'closedAt',
-    'statusCheckRollup',
   ].join(',');
 
-  const raw = gh(['pr', 'list', '--repo', REPO, '--state', 'open', '--limit', '200', '--json', fields]);
+  const raw = gh(['pr', 'list', '--repo', REPO, '--state', 'open', '--limit', '500', '--json', fields]);
   const prs = JSON.parse(raw) as Array<Record<string, any>>;
 
-  return prs
+  const communityPRs = prs
     .filter((pr) => isCommunityAuthor(pr.author.login, internalAuthors))
     .filter((pr) => !pr.isDraft)
     .map((pr) => ({
@@ -85,8 +84,88 @@ export async function fetchCommunityPRs(internalAuthors: Set<string>): Promise<G
       isDraft: pr.isDraft,
       mergedAt: pr.mergedAt,
       closedAt: pr.closedAt,
-      ciStatus: parseCIStatus(pr.statusCheckRollup || []),
+      ciStatus: 'pending' as const,
     }));
+
+  // Batch-fetch CI statuses via GraphQL (25 PRs per query to avoid timeouts)
+  const ciMap = fetchCIStatuses(communityPRs.map((pr) => pr.number));
+  for (const pr of communityPRs) {
+    pr.ciStatus = ciMap.get(pr.number) ?? 'pending';
+  }
+
+  return communityPRs;
+}
+
+export function fetchCIStatuses(
+  prNumbers: number[],
+  batchSize = 25,
+): Map<number, 'passing' | 'failing' | 'pending'> {
+  const result = new Map<number, 'passing' | 'failing' | 'pending'>();
+  const [owner, name] = REPO.split('/');
+
+  for (let i = 0; i < prNumbers.length; i += batchSize) {
+    const batch = prNumbers.slice(i, i + batchSize);
+    const aliases = batch
+      .map((num, idx) =>
+        `pr_${idx}: pullRequest(number: ${num}) {
+          number
+          commits(last: 1) {
+            nodes {
+              commit {
+                statusCheckRollup {
+                  contexts(last: 100) {
+                    nodes {
+                      ... on CheckRun { status conclusion }
+                      ... on StatusContext { state }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }`)
+      .join('\n');
+
+    const query = `query {
+      repository(owner: "${owner}", name: "${name}") {
+        ${aliases}
+      }
+    }`;
+
+    try {
+      const raw = gh(['api', 'graphql', '-f', `query=${query}`]);
+      const data = JSON.parse(raw).data.repository;
+
+      for (let idx = 0; idx < batch.length; idx++) {
+        const prData = data[`pr_${idx}`];
+        if (!prData) continue;
+
+        const rollup = prData.commits?.nodes?.[0]?.commit?.statusCheckRollup;
+        const contexts = rollup?.contexts?.nodes ?? [];
+
+        const checks = contexts.map((ctx: any) => {
+          if ('conclusion' in ctx) {
+            return { status: ctx.status, conclusion: ctx.conclusion };
+          }
+          // StatusContext uses 'state' instead of status/conclusion
+          const state = ctx.state;
+          return {
+            status: state === 'PENDING' ? 'IN_PROGRESS' : 'COMPLETED',
+            conclusion: state === 'SUCCESS' ? 'SUCCESS' : state === 'FAILURE' || state === 'ERROR' ? 'FAILURE' : null,
+          };
+        });
+
+        result.set(batch[idx], parseCIStatus(checks));
+      }
+    } catch {
+      // If a batch fails, mark all PRs in it as pending
+      for (const num of batch) {
+        result.set(num, 'pending');
+      }
+    }
+  }
+
+  return result;
 }
 
 export async function fetchIssue(issueNumber: number): Promise<GitHubIssue | null> {
