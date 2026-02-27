@@ -1,11 +1,6 @@
 export const REPO = 'strapi/strapi';
 
-export const INTERNAL_AUTHORS = [
-  'butcherZ', 'mathildeleg', 'nclsndr', 'markkaylor',
-  'Adzouz', 'innerdvations', 'derrickmehaffy', 'Bassel17',
-  'alex-strapi', 'remidej', 'PaulBratslavsky', 'unrevised6419',
-  'jhoward1994', 'HichamELBSI',
-];
+export const STRAPI_ORG = 'strapi';
 
 export const BOT_PATTERNS = ['[bot]', 'app/dependabot', 'renovate'];
 

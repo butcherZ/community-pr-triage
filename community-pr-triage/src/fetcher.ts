@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { REPO, INTERNAL_AUTHORS, BOT_PATTERNS } from './config.js';
+import { REPO, STRAPI_ORG, BOT_PATTERNS } from './config.js';
 import type { GitHubPR, GitHubIssue, LinkedIssueData } from './types.js';
 
 // --- Pure helpers (unit-testable) ---
@@ -17,8 +17,8 @@ export function parseIssueRefs(body: string): number[] {
   return [...refs].filter((n) => n >= 100);
 }
 
-export function isCommunityAuthor(author: string): boolean {
-  if (INTERNAL_AUTHORS.includes(author)) return false;
+export function isCommunityAuthor(author: string, internalAuthors: Set<string>): boolean {
+  if (internalAuthors.has(author)) return false;
   if (BOT_PATTERNS.some((p) => author.includes(p))) return false;
   return true;
 }
@@ -48,7 +48,17 @@ function gh(args: string[]): string {
   return execFileSync('gh', args, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
 }
 
-export async function fetchCommunityPRs(): Promise<GitHubPR[]> {
+export function fetchInternalAuthors(): Set<string> {
+  const raw = gh([
+    'api', `orgs/${STRAPI_ORG}/members`,
+    '--paginate',
+    '--jq', '.[].login',
+  ]);
+  const logins = raw.trim().split('\n').filter(Boolean);
+  return new Set(logins);
+}
+
+export async function fetchCommunityPRs(internalAuthors: Set<string>): Promise<GitHubPR[]> {
   const fields = [
     'number', 'title', 'author', 'body', 'labels', 'additions', 'deletions',
     'changedFiles', 'createdAt', 'state', 'isDraft', 'mergedAt', 'closedAt',
@@ -59,7 +69,7 @@ export async function fetchCommunityPRs(): Promise<GitHubPR[]> {
   const prs = JSON.parse(raw) as Array<Record<string, any>>;
 
   return prs
-    .filter((pr) => isCommunityAuthor(pr.author.login))
+    .filter((pr) => isCommunityAuthor(pr.author.login, internalAuthors))
     .filter((pr) => !pr.isDraft)
     .map((pr) => ({
       number: pr.number,

@@ -28,18 +28,20 @@ describe('parseIssueRefs', () => {
 });
 
 describe('isCommunityAuthor', () => {
+  const internalAuthors = new Set(['butcherZ', 'markkaylor', 'nclsndr']);
+
   it('filters internal authors', () => {
-    expect(isCommunityAuthor('butcherZ')).toBe(false);
-    expect(isCommunityAuthor('markkaylor')).toBe(false);
+    expect(isCommunityAuthor('butcherZ', internalAuthors)).toBe(false);
+    expect(isCommunityAuthor('markkaylor', internalAuthors)).toBe(false);
   });
 
   it('filters bots', () => {
-    expect(isCommunityAuthor('app/dependabot')).toBe(false);
-    expect(isCommunityAuthor('renovate[bot]')).toBe(false);
+    expect(isCommunityAuthor('app/dependabot', internalAuthors)).toBe(false);
+    expect(isCommunityAuthor('renovate[bot]', internalAuthors)).toBe(false);
   });
 
   it('allows community authors', () => {
-    expect(isCommunityAuthor('someContributor')).toBe(true);
+    expect(isCommunityAuthor('someContributor', internalAuthors)).toBe(true);
   });
 });
 
