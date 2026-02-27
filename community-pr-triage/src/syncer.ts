@@ -63,12 +63,13 @@ export async function syncToLinear(scoredPRs: ScoredPR[]): Promise<{
   created: number;
   updated: number;
   closed: number;
+  relationsCreated: number;
 }> {
   const apiKey = process.env.LINEAR_API_KEY;
   if (!apiKey) throw new Error('LINEAR_API_KEY environment variable is required');
 
   const client = new LinearClient({ apiKey });
-  const stats = { created: 0, updated: 0, closed: 0 };
+  const stats = { created: 0, updated: 0, closed: 0, relationsCreated: 0 };
 
   // Fetch all existing issues in the team
   const existingIssues: ExistingIssue[] = [];
@@ -102,6 +103,9 @@ export async function syncToLinear(scoredPRs: ScoredPR[]): Promise<{
 
   const openPRNumbers = new Set(scoredPRs.map((s) => s.pr.number));
 
+  // Track PR Linear issue IDs for relation linking
+  const prLinearIssueIds = new Map<number, string>();
+
   for (const scored of scoredPRs) {
     const existing = issueByPR.get(scored.pr.number);
     const linearPriority = mapPriorityToLinear(scored.priority);
@@ -114,9 +118,10 @@ export async function syncToLinear(scoredPRs: ScoredPR[]): Promise<{
         description,
         labelIds,
       });
+      prLinearIssueIds.set(scored.pr.number, existing.id);
       stats.updated++;
     } else {
-      await client.createIssue({
+      const result = await client.createIssue({
         teamId: LINEAR_TEAM_ID,
         title: `PR #${scored.pr.number}: ${scored.pr.title}`,
         description,
@@ -124,7 +129,56 @@ export async function syncToLinear(scoredPRs: ScoredPR[]): Promise<{
         stateId: LINEAR_STATUSES.triage,
         labelIds,
       });
+      const created = await result.issue;
+      if (created) prLinearIssueIds.set(scored.pr.number, created.id);
       stats.created++;
+    }
+  }
+
+  // Link PR Linear issues to related GitHub issue Linear issues
+  for (const scored of scoredPRs) {
+    const prIssueId = prLinearIssueIds.get(scored.pr.number);
+    if (!prIssueId || scored.linkedIssues.length === 0) continue;
+
+    // Get existing relations to avoid duplicates
+    const existingRelations = new Set<string>();
+    try {
+      const prIssue = await client.issue(prIssueId);
+      const relations = await prIssue.relations();
+      for (const rel of relations.nodes) {
+        const related = await rel.relatedIssue;
+        if (related) existingRelations.add(related.id);
+      }
+      const inverseRelations = await prIssue.inverseRelations();
+      for (const rel of inverseRelations.nodes) {
+        const related = await rel.issue;
+        if (related) existingRelations.add(related.id);
+      }
+    } catch {
+      // If we can't fetch relations, proceed anyway — duplicates will be caught by Linear
+    }
+
+    for (const linked of scored.linkedIssues) {
+      const ghIssueNum = linked.issue.number;
+      const searchTerm = `github.com/strapi/strapi/issues/${ghIssueNum}`;
+
+      try {
+        const searchResult = await client.searchIssues(searchTerm, { first: 5 });
+        for (const node of searchResult.nodes) {
+          // Skip if it's the same issue or already related
+          if (node.id === prIssueId || existingRelations.has(node.id)) continue;
+
+          await client.createIssueRelation({
+            issueId: prIssueId,
+            relatedIssueId: node.id,
+            type: 'related' as any,
+          });
+          existingRelations.add(node.id);
+          stats.relationsCreated++;
+        }
+      } catch {
+        // Search or relation creation failed for this issue, continue
+      }
     }
   }
 

@@ -67,7 +67,7 @@ async function main() {
   } else {
     console.log('Syncing to Linear...');
     const stats = await syncToLinear(scoredPRs);
-    console.log(`Linear sync complete: ${stats.created} created, ${stats.updated} updated, ${stats.closed} closed.\n`);
+    console.log(`Linear sync complete: ${stats.created} created, ${stats.updated} updated, ${stats.closed} closed, ${stats.relationsCreated} relations linked.\n`);
   }
 }
 
