@@ -1,5 +1,13 @@
 import { LinearClient } from '@linear/sdk';
-import { LINEAR_TEAM_ID, LINEAR_CMS_GITHUB_TEAM_ID, LINEAR_STATUSES, LINEAR_LABELS, LINEAR_TRIAGE_LABELS, LINEAR_SOURCE_LABELS, MANAGED_LABEL_IDS } from './config.js';
+import {
+  LINEAR_TEAM_ID,
+  LINEAR_CMS_GITHUB_TEAM_ID,
+  LINEAR_STATUSES,
+  LINEAR_LABELS,
+  LINEAR_TRIAGE_LABELS,
+  LINEAR_SOURCE_LABELS,
+  MANAGED_LABEL_IDS,
+} from './config.js';
 import type { ScoredPR, PriorityTier, ComplexityTier } from './types.js';
 
 // --- Pure helpers (unit-testable) ---
@@ -15,9 +23,7 @@ export function mapPriorityToLinear(priority: PriorityTier): number {
 }
 
 export function mapLabelsToLinear(ghLabels: string[]): string[] {
-  return ghLabels
-    .map((l) => LINEAR_LABELS[l])
-    .filter((id): id is string => id !== undefined);
+  return ghLabels.map((l) => LINEAR_LABELS[l]).filter((id): id is string => id !== undefined);
 }
 
 export function buildLabelIds(scored: ScoredPR): string[] {
@@ -60,7 +66,8 @@ export function mergeLabelIds(currentLabelIds: string[], newManagedIds: string[]
 }
 
 export function buildDescription(scored: ScoredPR): string {
-  const { pr, linkedIssues, value, complexity, priority, area, areaTier, prType, isQuickWin } = scored;
+  const { pr, linkedIssues, value, complexity, priority, area, areaTier, prType, isQuickWin } =
+    scored;
   const loc = pr.additions + pr.deletions;
   const ageDays = Math.floor((Date.now() - new Date(pr.createdAt).getTime()) / 86400000);
   const sizeLabel = loc < 50 ? 'S' : loc < 300 ? 'M' : loc < 1000 ? 'L' : 'XL';
@@ -109,17 +116,34 @@ interface ExistingIssue {
   attachmentUrls: string[];
 }
 
-export async function syncToLinear(scoredPRs: ScoredPR[], mergedPRNumbers: Set<number> = new Set(), skipRelations = false): Promise<{
+export async function syncToLinear(
+  scoredPRs: ScoredPR[],
+  mergedPRNumbers: Set<number> = new Set(),
+  skipRelations = false
+): Promise<{
   created: number;
   updated: number;
   closed: number;
   relationsCreated: number;
+  issueUrls: Map<number, string>;
 }> {
   const apiKey = process.env.LINEAR_API_KEY;
   if (!apiKey) throw new Error('LINEAR_API_KEY environment variable is required');
 
   const client = new LinearClient({ apiKey });
-  const stats = { created: 0, updated: 0, closed: 0, relationsCreated: 0 };
+  const stats: {
+    created: number;
+    updated: number;
+    closed: number;
+    relationsCreated: number;
+    issueUrls: Map<number, string>;
+  } = {
+    created: 0,
+    updated: 0,
+    closed: 0,
+    relationsCreated: 0,
+    issueUrls: new Map(),
+  };
 
   // Search for existing PR issues across all teams (not just our team)
   // so we don't create duplicates when tickets are moved to other teams
@@ -181,6 +205,18 @@ export async function syncToLinear(scoredPRs: ScoredPR[], mergedPRNumbers: Set<n
       }
       await client.updateIssue(existing.id, updatePayload);
       prLinearIssueIds.set(scored.pr.number, existing.id);
+      // Capture issue URL
+      try {
+        const updatedIssue = await client.issue(existing.id);
+        const team = await updatedIssue.team;
+        if (team)
+          stats.issueUrls.set(
+            scored.pr.number,
+            `https://linear.app/strapi/issue/${team.key}-${updatedIssue.number}`
+          );
+      } catch {
+        /* non-critical */
+      }
       // Ensure PR attachment exists
       if (!existing.attachmentUrls.some((url) => url.includes(`/pull/${scored.pr.number}`))) {
         try {
@@ -207,6 +243,17 @@ export async function syncToLinear(scoredPRs: ScoredPR[], mergedPRNumbers: Set<n
       const created = await result.issue;
       if (created) {
         prLinearIssueIds.set(scored.pr.number, created.id);
+        // Capture issue URL
+        try {
+          const team = await created.team;
+          if (team)
+            stats.issueUrls.set(
+              scored.pr.number,
+              `https://linear.app/strapi/issue/${team.key}-${created.number}`
+            );
+        } catch {
+          /* non-critical */
+        }
         // Attach the GitHub PR URL to the newly created issue
         try {
           await client.createAttachment({
@@ -225,57 +272,57 @@ export async function syncToLinear(scoredPRs: ScoredPR[], mergedPRNumbers: Set<n
 
   // Link PR Linear issues to related GitHub issue Linear issues (skip when AI relations are used)
   if (!skipRelations) {
-  for (const scored of scoredPRs) {
-    const prIssueId = prLinearIssueIds.get(scored.pr.number);
-    if (!prIssueId || scored.linkedIssues.length === 0) continue;
+    for (const scored of scoredPRs) {
+      const prIssueId = prLinearIssueIds.get(scored.pr.number);
+      if (!prIssueId || scored.linkedIssues.length === 0) continue;
 
-    // Get existing relations to avoid duplicates
-    const existingRelations = new Set<string>();
-    try {
-      const prIssue = await client.issue(prIssueId);
-      const relations = await prIssue.relations();
-      for (const rel of relations.nodes) {
-        const related = await rel.relatedIssue;
-        if (related) existingRelations.add(related.id);
-      }
-      const inverseRelations = await prIssue.inverseRelations();
-      for (const rel of inverseRelations.nodes) {
-        const related = await rel.issue;
-        if (related) existingRelations.add(related.id);
-      }
-    } catch {
-      // If we can't fetch relations, proceed anyway — duplicates will be caught by Linear
-    }
-
-    for (const linked of scored.linkedIssues) {
-      const ghIssueNum = linked.issue.number;
-
+      // Get existing relations to avoid duplicates
+      const existingRelations = new Set<string>();
       try {
-        // Find CMS-Github issues with an attachment linking to the exact GitHub issue
-        const cmsResult = await client.issues({
-          filter: {
-            team: { id: { eq: LINEAR_CMS_GITHUB_TEAM_ID } },
-            attachments: { url: { contains: `strapi/strapi/issues/${ghIssueNum}` } },
-          },
-          first: 5,
-        });
-
-        for (const node of cmsResult.nodes) {
-          if (node.id === prIssueId || existingRelations.has(node.id)) continue;
-
-          await client.createIssueRelation({
-            issueId: prIssueId,
-            relatedIssueId: node.id,
-            type: 'related' as any,
-          });
-          existingRelations.add(node.id);
-          stats.relationsCreated++;
+        const prIssue = await client.issue(prIssueId);
+        const relations = await prIssue.relations();
+        for (const rel of relations.nodes) {
+          const related = await rel.relatedIssue;
+          if (related) existingRelations.add(related.id);
+        }
+        const inverseRelations = await prIssue.inverseRelations();
+        for (const rel of inverseRelations.nodes) {
+          const related = await rel.issue;
+          if (related) existingRelations.add(related.id);
         }
       } catch {
-        // Relation search or creation failed for this issue, continue
+        // If we can't fetch relations, proceed anyway — duplicates will be caught by Linear
+      }
+
+      for (const linked of scored.linkedIssues) {
+        const ghIssueNum = linked.issue.number;
+
+        try {
+          // Find CMS-Github issues with an attachment linking to the exact GitHub issue
+          const cmsResult = await client.issues({
+            filter: {
+              team: { id: { eq: LINEAR_CMS_GITHUB_TEAM_ID } },
+              attachments: { url: { contains: `strapi/strapi/issues/${ghIssueNum}` } },
+            },
+            first: 5,
+          });
+
+          for (const node of cmsResult.nodes) {
+            if (node.id === prIssueId || existingRelations.has(node.id)) continue;
+
+            await client.createIssueRelation({
+              issueId: prIssueId,
+              relatedIssueId: node.id,
+              type: 'related' as any,
+            });
+            existingRelations.add(node.id);
+            stats.relationsCreated++;
+          }
+        } catch {
+          // Relation search or creation failed for this issue, continue
+        }
       }
     }
-  }
   } // end skipRelations
 
   // Close Linear issues for PRs no longer open

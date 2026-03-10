@@ -8,11 +8,13 @@ export interface GitHubPR {
   deletions: number;
   changedFiles: number;
   createdAt: string;
+  updatedAt: string;
   state: string;
   isDraft: boolean;
   mergedAt: string | null;
   closedAt: string | null;
   ciStatus: 'passing' | 'failing' | 'pending';
+  files: string[];
 }
 
 export interface GitHubIssue {

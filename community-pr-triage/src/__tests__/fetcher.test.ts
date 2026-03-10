@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { parseIssueRefs, isCommunityAuthor, parseCIStatus, extractArea } from '../fetcher.js';
+import {
+  parseIssueRefs,
+  isCommunityAuthor,
+  parseCIStatus,
+  extractArea,
+  estimateAreaFromFiles,
+} from '../fetcher.js';
 
 describe('parseIssueRefs', () => {
   it('extracts #12345 references', () => {
@@ -86,5 +92,45 @@ describe('extractArea', () => {
 
   it('returns unknown for no source label', () => {
     expect(extractArea(['pr: fix'])).toBe('unknown');
+  });
+});
+
+describe('estimateAreaFromFiles', () => {
+  it('extracts area from a single core package path', () => {
+    expect(estimateAreaFromFiles(['packages/core/content-manager/src/index.ts'])).toBe(
+      'content-manager'
+    );
+  });
+
+  it('extracts area from a single plugin path', () => {
+    expect(estimateAreaFromFiles(['packages/plugins/i18n/server/src/bootstrap.ts'])).toBe('i18n');
+  });
+
+  it('returns most frequent area when multiple same-area paths', () => {
+    expect(
+      estimateAreaFromFiles([
+        'packages/core/admin/src/components/Foo.tsx',
+        'packages/core/admin/src/components/Bar.tsx',
+        'packages/core/content-manager/src/index.ts',
+      ])
+    ).toBe('admin');
+  });
+
+  it('returns most common area when mixed areas', () => {
+    expect(
+      estimateAreaFromFiles([
+        'packages/core/admin/src/a.ts',
+        'packages/plugins/i18n/src/b.ts',
+        'packages/plugins/i18n/src/c.ts',
+      ])
+    ).toBe('i18n');
+  });
+
+  it('returns unknown for no matching paths', () => {
+    expect(estimateAreaFromFiles(['README.md', '.github/workflows/ci.yml'])).toBe('unknown');
+  });
+
+  it('returns unknown for empty files array', () => {
+    expect(estimateAreaFromFiles([])).toBe('unknown');
   });
 });
