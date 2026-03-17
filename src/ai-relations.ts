@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { LinearClient } from '@linear/sdk';
-import { LINEAR_TEAM_ID, LINEAR_CMS_GITHUB_TEAM_ID } from './config.js';
+import { LINEAR_CPR_TEAM_ID, LINEAR_CMS_TEAM_ID, LINEAR_CMS_GITHUB_TEAM_ID } from './config.js';
 import { matchPRNumber } from './syncer.js';
 import type { ScoredPR } from './types.js';
 
@@ -29,7 +29,7 @@ export async function evaluateRelation(
   prTitle: string,
   prBody: string,
   candidateTitle: string,
-  candidateDescription: string,
+  candidateDescription: string
 ): Promise<{ related: boolean; confidence: number; reason: string }> {
   const candidateSnippet = candidateDescription.slice(0, 1000);
   const prSnippet = prBody.slice(0, 1000);
@@ -37,9 +37,10 @@ export async function evaluateRelation(
   const response = await anthropic.messages.create({
     model: EVAL_MODEL,
     max_tokens: 100,
-    messages: [{
-      role: 'user',
-      content: `Determine if this PR and Linear issue are related (addressing the same bug, feature, or area of code).
+    messages: [
+      {
+        role: 'user',
+        content: `Determine if this PR and Linear issue are related (addressing the same bug, feature, or area of code).
 
 PR: "${prTitle}"
 ${prSnippet}
@@ -49,7 +50,8 @@ ${candidateSnippet}
 
 Respond in exactly this JSON format, nothing else:
 {"related": true/false, "confidence": 0.0-1.0, "reason": "one sentence"}`,
-    }],
+      },
+    ],
   });
 
   try {
@@ -75,43 +77,50 @@ export async function discoverRelatedQueries(
   anthropic: Anthropic,
   prTitle: string,
   prBody: string,
-  area: string,
+  area: string
 ): Promise<string[]> {
   const prSnippet = prBody.slice(0, 1500);
 
   const response = await anthropic.messages.create({
     model: DISCOVERY_MODEL,
     max_tokens: 200,
-    messages: [{
-      role: 'user',
-      content: `Given this Strapi community PR, suggest 3 short search queries to find related Linear issues (bugs, features, or discussions about the same area/problem). Focus on the core problem, not the PR itself.
+    messages: [
+      {
+        role: 'user',
+        content: `Given this Strapi community PR, suggest 3 short search queries to find related Linear issues (bugs, features, or discussions about the same area/problem). Focus on the core problem, not the PR itself.
 
 PR: "${prTitle}"
 Area: ${area}
 ${prSnippet}
 
 Respond with exactly 3 search queries, one per line, nothing else. Each query should be 3-6 words.`,
-    }],
+      },
+    ],
   });
 
   const text = response.content[0].type === 'text' ? response.content[0].text : '';
-  return text.trim().split('\n').filter((q) => q.trim().length > 0).slice(0, 3);
+  return text
+    .trim()
+    .split('\n')
+    .filter((q) => q.trim().length > 0)
+    .slice(0, 3);
 }
 
 // --- Main orchestration ---
 
 export async function findAIRelations(
   scoredPRs: ScoredPR[],
-  linearClient: LinearClient,
+  linearClient: LinearClient
 ): Promise<Map<number, EvaluatedRelation[]>> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY environment variable is required for AI relations');
+  if (!apiKey)
+    throw new Error('ANTHROPIC_API_KEY environment variable is required for AI relations');
 
   const anthropic = new Anthropic({ apiKey });
   const results = new Map<number, EvaluatedRelation[]>();
 
   // Only link to issues from these teams
-  const allowedTeamIds = new Set([LINEAR_TEAM_ID, LINEAR_CMS_GITHUB_TEAM_ID]);
+  const allowedTeamIds = new Set([LINEAR_CPR_TEAM_ID, LINEAR_CMS_TEAM_ID, LINEAR_CMS_GITHUB_TEAM_ID]);
 
   // Build a set of existing PR issue IDs to skip self-matches
   const prIssueIds = new Set<string>();
@@ -120,7 +129,7 @@ export async function findAIRelations(
 
   while (hasNext) {
     const result = await linearClient.issues({
-      filter: { team: { id: { eq: LINEAR_TEAM_ID } } },
+      filter: { team: { id: { eq: LINEAR_CPR_TEAM_ID } } },
       after: cursor,
       first: 100,
     });
@@ -188,7 +197,10 @@ export async function findAIRelations(
     // B: Discover hidden relations
     try {
       const queries = await discoverRelatedQueries(
-        anthropic, scored.pr.title, scored.pr.body, scored.area,
+        anthropic,
+        scored.pr.title,
+        scored.pr.body,
+        scored.area
       );
 
       for (const query of queries) {
@@ -215,7 +227,9 @@ export async function findAIRelations(
     }
 
     if (candidates.length > 0) {
-      console.log(`  PR #${scored.pr.number}: ${candidates.length} candidates (${candidates.filter(c => c.source === 'explicit').length} explicit, ${candidates.filter(c => c.source === 'discovered').length} discovered)`);
+      console.log(
+        `  PR #${scored.pr.number}: ${candidates.length} candidates (${candidates.filter((c) => c.source === 'explicit').length} explicit, ${candidates.filter((c) => c.source === 'discovered').length} discovered)`
+      );
     }
 
     // Evaluate all candidates with AI
@@ -227,7 +241,7 @@ export async function findAIRelations(
           scored.pr.title,
           scored.pr.body,
           candidate.issueTitle,
-          candidate.issueDescription,
+          candidate.issueDescription
         );
 
         if (result.related && result.confidence >= 0.6) {
@@ -255,7 +269,7 @@ export async function findAIRelations(
 }
 
 export async function syncAIRelations(
-  scoredPRs: ScoredPR[],
+  scoredPRs: ScoredPR[]
 ): Promise<{ relationsCreated: number; relationsSkipped: number }> {
   const linearApiKey = process.env.LINEAR_API_KEY;
   if (!linearApiKey) throw new Error('LINEAR_API_KEY environment variable is required');
@@ -273,7 +287,7 @@ export async function syncAIRelations(
 
   while (hasNext) {
     const result = await linearClient.issues({
-      filter: { team: { id: { eq: LINEAR_TEAM_ID } } },
+      filter: { team: { id: { eq: LINEAR_CPR_TEAM_ID } } },
       after: cursor,
       first: 100,
     });
@@ -320,7 +334,9 @@ export async function syncAIRelations(
           type: 'related' as any,
         });
         stats.relationsCreated++;
-        console.log(`  Linked CPR PR #${prNum} ↔ ${rel.issueTitle.slice(0, 60)}... (${(rel.confidence * 100).toFixed(0)}% confidence: ${rel.reason})`);
+        console.log(
+          `  Linked CPR PR #${prNum} ↔ ${rel.issueTitle.slice(0, 60)}... (${(rel.confidence * 100).toFixed(0)}% confidence: ${rel.reason})`
+        );
       } catch {
         // Relation creation failed
       }
