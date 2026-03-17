@@ -57,7 +57,7 @@ export function buildLabelIds(scored: ScoredPR): string[] {
     ids.push(sourceId);
   }
 
-  return ids;
+  return ids.filter(Boolean);
 }
 
 export function mergeLabelIds(currentLabelIds: string[], newManagedIds: string[]): string[] {
