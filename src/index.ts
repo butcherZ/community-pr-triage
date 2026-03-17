@@ -3,7 +3,7 @@ import { createInterface } from 'node:readline';
 import { AREA_TIERS, validateConfig } from './config.js';
 import { fetchInternalAuthors, fetchCommunityPRs, fetchRecentlyMergedPRNumbers, fetchIssue, parseIssueRefs, parseLinkedIssueData, extractArea, estimateAreaFromFiles } from './fetcher.js';
 import { calculateValue, calculateComplexity, calculatePriority, isQuickWin } from './scorer.js';
-import { syncToLinear } from './syncer.js';
+import { syncToLinear, findSiblingPRs } from './syncer.js';
 import { printReport, generateMarkdownReport } from './reporter.js';
 import { selectSprintPRs, formatSprintUpdate, postSprintUpdate } from './sprint.js';
 import type { ScoredPR, LinkedIssueData } from './types.js';
@@ -100,6 +100,20 @@ async function main() {
         console.log('Sprint update skipped.\n');
       }
     }
+  }
+
+  // Preview sibling PR relations
+  const siblingPairs = findSiblingPRs(scoredPRs);
+  if (siblingPairs.length > 0) {
+    console.log(`Sibling PRs (shared GitHub issues) — ${siblingPairs.length} relation(s) to link:`);
+    for (const [a, b] of siblingPairs) {
+      const prA = scoredPRs.find((s) => s.pr.number === a);
+      const prB = scoredPRs.find((s) => s.pr.number === b);
+      const titleA = prA ? prA.pr.title.slice(0, 60) : `#${a}`;
+      const titleB = prB ? prB.pr.title.slice(0, 60) : `#${b}`;
+      console.log(`  PR #${a} (${titleA}) ↔ PR #${b} (${titleB})`);
+    }
+    console.log();
   }
 
   if (dryRun) {

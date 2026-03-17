@@ -1,5 +1,5 @@
 import { LinearClient } from '@linear/sdk';
-import { LINEAR_TEAM_ID, LINEAR_SPRINT_PROJECT_ID } from './config.js';
+import { LINEAR_CPR_TEAM_ID, LINEAR_PROJECT_ID } from './config.js';
 import { matchPRNumber } from './syncer.js';
 import type { ScoredPR } from './types.js';
 
@@ -56,7 +56,11 @@ export function groupByArea(prs: ScoredPR[]): Map<string, ScoredPR[]> {
   return groups;
 }
 
-export function formatSprintUpdate(sprintPRs: ScoredPR[], totalPRs: number, linearUrls: Map<number, string> = new Map()): string {
+export function formatSprintUpdate(
+  sprintPRs: ScoredPR[],
+  totalPRs: number,
+  linearUrls: Map<number, string> = new Map()
+): string {
   const grouped = groupByArea(sprintPRs);
   const date = new Date().toISOString().split('T')[0];
 
@@ -66,7 +70,9 @@ export function formatSprintUpdate(sprintPRs: ScoredPR[], totalPRs: number, line
   // Summary stats
   const urgent = sprintPRs.filter((p) => p.priority === 'urgent' || p.priority === 'high').length;
   const quickWins = sprintPRs.filter((p) => p.isQuickWin).length;
-  const features = sprintPRs.filter((p) => p.prType === 'enhancement' || p.prType === 'feature').length;
+  const features = sprintPRs.filter(
+    (p) => p.prType === 'enhancement' || p.prType === 'feature'
+  ).length;
   md += `**Mix:** ${urgent} urgent/high · ${quickWins} quick wins · ${features} enhancements/features\n\n`;
   md += `---\n\n`;
 
@@ -82,7 +88,8 @@ export function formatSprintUpdate(sprintPRs: ScoredPR[], totalPRs: number, line
       if (pr.priority === 'urgent') tags.push('🔴 urgent');
       else if (pr.priority === 'high') tags.push('🟠 high');
       if (pr.isQuickWin) tags.push('⚡ quick win');
-      const ciIcon = pr.pr.ciStatus === 'passing' ? '✅' : pr.pr.ciStatus === 'failing' ? '❌' : '⏳';
+      const ciIcon =
+        pr.pr.ciStatus === 'passing' ? '✅' : pr.pr.ciStatus === 'failing' ? '❌' : '⏳';
 
       const linearUrl = linearUrls.get(pr.pr.number);
       const ticketRef = linearUrl ? ` · ${linearUrl}` : '';
@@ -114,7 +121,7 @@ export async function postSprintUpdate(sprintPRs: ScoredPR[], totalPRs: number):
 
   while (hasNext) {
     const result = await client.issues({
-      filter: { team: { id: { eq: LINEAR_TEAM_ID } } },
+      filter: { team: { id: { eq: LINEAR_CPR_TEAM_ID } } },
       after: cursor,
       first: 100,
     });
@@ -135,7 +142,7 @@ export async function postSprintUpdate(sprintPRs: ScoredPR[], totalPRs: number):
   const milestoneName = `Sprint ${date}`;
 
   let milestoneId: string | undefined;
-  const project = await client.project(LINEAR_SPRINT_PROJECT_ID);
+  const project = await client.project(LINEAR_PROJECT_ID);
   const milestones = await project.projectMilestones();
   const existing = milestones.nodes.find((m) => m.name === milestoneName);
 
@@ -144,7 +151,7 @@ export async function postSprintUpdate(sprintPRs: ScoredPR[], totalPRs: number):
     console.log(`Reusing existing milestone: ${milestoneName}`);
   } else {
     const milestoneResult = await client.createProjectMilestone({
-      projectId: LINEAR_SPRINT_PROJECT_ID,
+      projectId: LINEAR_PROJECT_ID,
       name: milestoneName,
       targetDate,
     });
@@ -156,7 +163,7 @@ export async function postSprintUpdate(sprintPRs: ScoredPR[], totalPRs: number):
   const body = formatSprintUpdate(sprintPRs, totalPRs, linearUrls);
 
   const updateResult = await client.createProjectUpdate({
-    projectId: LINEAR_SPRINT_PROJECT_ID,
+    projectId: LINEAR_PROJECT_ID,
     body,
     health: 'onTrack',
   });
@@ -168,7 +175,7 @@ export async function postSprintUpdate(sprintPRs: ScoredPR[], totalPRs: number):
     const issueId = linearIds.get(prNum);
     if (!issueId) continue;
     try {
-      const updatePayload: Record<string, any> = { projectId: LINEAR_SPRINT_PROJECT_ID };
+      const updatePayload: Record<string, any> = { projectId: LINEAR_PROJECT_ID };
       if (milestoneId) updatePayload.projectMilestoneId = milestoneId;
       await client.updateIssue(issueId, updatePayload);
       added++;
