@@ -136,7 +136,7 @@ export function findSiblingPRs(scoredPRs: ScoredPR[]): [number, number][] {
 
 // --- I/O functions (Linear API) ---
 
-interface ExistingIssue {
+export interface ExistingIssue {
   id: string;
   title: string;
   stateType: string;
@@ -144,37 +144,54 @@ interface ExistingIssue {
   attachmentUrls: string[];
 }
 
-export async function syncToLinear(
+export interface PRTicketSummary {
+  teamId: string;
+  identifier: string;
+  status: string;
+}
+
+/**
+ * Lightweight lookup: returns PR number -> ticket summary (team, identifier, status).
+ * Searches CPR and CMS teams. Fast enough for dry-run previews.
+ */
+export async function fetchExistingPRSummary(
+  client: LinearClient,
+): Promise<Map<number, PRTicketSummary>> {
+  const result = new Map<number, PRTicketSummary>();
+
+  for (const teamId of [LINEAR_CPR_TEAM_ID, LINEAR_CMS_TEAM_ID]) {
+    let hasNext = true;
+    let cursor: string | undefined;
+
+    while (hasNext) {
+      const page = await client.issues({
+        filter: { team: { id: { eq: teamId } } },
+        after: cursor,
+        first: 100,
+      });
+      for (const issue of page.nodes) {
+        const prNum = matchPRNumber(issue.title);
+        if (!prNum) continue;
+        const state = await issue.state;
+        const team = await issue.team;
+        result.set(prNum, {
+          teamId,
+          identifier: team ? `${team.key}-${issue.number}` : issue.id,
+          status: state?.name ?? 'Unknown',
+        });
+      }
+      hasNext = page.pageInfo.hasNextPage;
+      cursor = page.pageInfo.endCursor;
+    }
+  }
+
+  return result;
+}
+
+export async function fetchExistingPRIssues(
+  client: LinearClient,
   scoredPRs: ScoredPR[],
-  mergedPRNumbers: Set<number> = new Set(),
-  skipRelations = false
-): Promise<{
-  created: number;
-  updated: number;
-  closed: number;
-  relationsCreated: number;
-  issueUrls: Map<number, string>;
-}> {
-  const apiKey = process.env.LINEAR_API_KEY;
-  if (!apiKey) throw new Error('LINEAR_API_KEY environment variable is required');
-
-  const client = new LinearClient({ apiKey });
-  const stats: {
-    created: number;
-    updated: number;
-    closed: number;
-    relationsCreated: number;
-    issueUrls: Map<number, string>;
-  } = {
-    created: 0,
-    updated: 0,
-    closed: 0,
-    relationsCreated: 0,
-    issueUrls: new Map(),
-  };
-
-  // Search for existing PR issues across all teams (not just our team)
-  // so we don't create duplicates when tickets are moved to other teams
+): Promise<Map<number, ExistingIssue>> {
   const existingIssues: ExistingIssue[] = [];
 
   // Strategy 1: Search by title pattern "PR #"
@@ -186,18 +203,24 @@ export async function syncToLinear(
       after: cursor,
       first: 100,
     });
-    for (const issue of result.nodes) {
-      if (!matchPRNumber(issue.title)) continue;
-      const state = await issue.state;
-      const labels = await issue.labels();
-      const attachments = await issue.attachments();
-      existingIssues.push({
-        id: issue.id,
-        title: issue.title,
-        stateType: state?.type ?? 'triage',
-        labelIds: labels.nodes.map((l) => l.id),
-        attachmentUrls: attachments.nodes.map((a) => a.url),
-      });
+    for (const searchNode of result.nodes) {
+      if (!matchPRNumber(searchNode.title)) continue;
+      // searchIssues returns lightweight nodes; fetch full issue for labels/attachments
+      try {
+        const issue = await client.issue(searchNode.id);
+        const state = await issue.state;
+        const labels = await issue.labels();
+        const attachments = await issue.attachments();
+        existingIssues.push({
+          id: issue.id,
+          title: issue.title,
+          stateType: state?.type ?? 'triage',
+          labelIds: labels.nodes.map((l) => l.id),
+          attachmentUrls: attachments.nodes.map((a) => a.url),
+        });
+      } catch {
+        // Issue fetch failed, skip
+      }
     }
     hasNext = result.pageInfo.hasNextPage;
     cursor = result.pageInfo.endCursor;
@@ -257,6 +280,40 @@ export async function syncToLinear(
       }
     }
   }
+
+  return issueByPR;
+}
+
+export async function syncToLinear(
+  scoredPRs: ScoredPR[],
+  mergedPRNumbers: Set<number> = new Set(),
+  skipRelations = false
+): Promise<{
+  created: number;
+  updated: number;
+  closed: number;
+  relationsCreated: number;
+  issueUrls: Map<number, string>;
+}> {
+  const apiKey = process.env.LINEAR_API_KEY;
+  if (!apiKey) throw new Error('LINEAR_API_KEY environment variable is required');
+
+  const client = new LinearClient({ apiKey });
+  const stats: {
+    created: number;
+    updated: number;
+    closed: number;
+    relationsCreated: number;
+    issueUrls: Map<number, string>;
+  } = {
+    created: 0,
+    updated: 0,
+    closed: 0,
+    relationsCreated: 0,
+    issueUrls: new Map(),
+  };
+
+  const issueByPR = await fetchExistingPRIssues(client, scoredPRs);
 
   const openPRNumbers = new Set(scoredPRs.map((s) => s.pr.number));
 

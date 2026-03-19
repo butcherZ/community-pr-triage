@@ -4,10 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "tsx src/index.ts",
-    "dry-run": "tsx src/index.ts --dry-run",
-    "sprint-update": "tsx src/index.ts --sprint-update",
-    "sprint-update:dry": "tsx src/index.ts --dry-run --sprint-update",
+    "sync": "tsx src/index.ts --sync",
+    "sync:dry": "tsx src/index.ts --sync --dry-run",
+    "update": "tsx src/index.ts --update",
+    "update:dry": "tsx src/index.ts --update --dry-run",
+    "all": "tsx src/index.ts --sync --update",
+    "all:dry": "tsx src/index.ts --sync --update --dry-run",
     "test": "vitest run",
     "test:watch": "vitest"
   },

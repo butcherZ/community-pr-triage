@@ -3,9 +3,10 @@ import { createInterface } from 'node:readline';
 import { AREA_TIERS, validateConfig } from './config.js';
 import { fetchInternalAuthors, fetchCommunityPRs, fetchRecentlyMergedPRNumbers, fetchIssue, parseIssueRefs, parseLinkedIssueData, extractArea, estimateAreaFromFiles } from './fetcher.js';
 import { calculateValue, calculateComplexity, calculatePriority, isQuickWin } from './scorer.js';
-import { syncToLinear, findSiblingPRs } from './syncer.js';
+import { syncToLinear, findSiblingPRs, fetchExistingPRSummary } from './syncer.js';
+import { LINEAR_CMS_TEAM_ID } from './config.js';
 import { printReport, generateMarkdownReport } from './reporter.js';
-import { selectSprintPRs, formatSprintUpdate, postSprintUpdate } from './sprint.js';
+import { generateProjectUpdate } from './project-update.js';
 import type { ScoredPR, LinkedIssueData } from './types.js';
 
 function confirm(question: string): Promise<boolean> {
@@ -35,8 +36,9 @@ function getPRType(labels: string[]): string {
 async function main() {
   validateConfig();
 
-  const dryRun = process.argv.includes('--dry-run');
-  const sprintUpdate = process.argv.includes('--sprint-update');
+  const doSync = process.argv.includes('--sync');
+  const doUpdate = process.argv.includes('--update');
+  const dryRun = process.argv.includes('--dry-run') || (!doSync && !doUpdate);
   const autoYes = process.argv.includes('--yes') || process.argv.includes('-y');
 
   console.log('Fetching internal authors from GitHub org...');
@@ -79,29 +81,6 @@ async function main() {
   scoredPRs.sort((a, b) => b.value.total - a.value.total);
   printReport(scoredPRs);
 
-  // Generate markdown report
-  const reportPath = `reports/triage-${new Date().toISOString().split('T')[0]}.md`;
-  generateMarkdownReport(scoredPRs, reportPath);
-  console.log(`Markdown report saved to: ${reportPath}\n`);
-
-  if (sprintUpdate) {
-    const sprintPRs = selectSprintPRs(scoredPRs);
-    console.log(`\nSprint recommendation (${sprintPRs.length} PRs):\n`);
-    console.log(formatSprintUpdate(sprintPRs, scoredPRs.length));
-
-    if (dryRun) {
-      console.log('[DRY RUN] Skipping sprint update post.\n');
-    } else {
-      const confirmed = autoYes || await confirm('Post this sprint update to Linear? (y/N) ');
-      if (confirmed) {
-        const url = await postSprintUpdate(sprintPRs, scoredPRs.length);
-        console.log(`Sprint update posted: ${url}\n`);
-      } else {
-        console.log('Sprint update skipped.\n');
-      }
-    }
-  }
-
   // Preview sibling PR relations
   const siblingPairs = findSiblingPRs(scoredPRs);
   if (siblingPairs.length > 0) {
@@ -116,20 +95,88 @@ async function main() {
     console.log();
   }
 
-  if (dryRun) {
-    console.log('[DRY RUN] Skipping Linear sync.\n');
-  } else {
-    const confirmed = autoYes || await confirm(`About to sync ${scoredPRs.length} PRs to Linear. Proceed? (y/N) `);
-    if (!confirmed) {
-      console.log('Sync canceled.\n');
-      return;
+  // Fetch sync preview (used in both dry-run report and console output)
+  let syncPreview: import('./reporter.js').SyncPreview | undefined;
+  const apiKey = process.env.LINEAR_API_KEY;
+  if (apiKey) {
+    const { LinearClient } = await import('@linear/sdk');
+    const client = new LinearClient({ apiKey });
+    console.log('Fetching existing Linear tickets for sync preview...');
+    const prSummary = await fetchExistingPRSummary(client);
+    const newPRs = scoredPRs.filter((s) => !prSummary.has(s.pr.number));
+    const existingCount = scoredPRs.filter((s) => prSummary.has(s.pr.number)).length;
+
+    // Find PRs picked up by CMS team
+    const pickedUpPRs: import('./reporter.js').PickedUpPR[] = [];
+    for (const [prNum, summary] of prSummary) {
+      if (summary.teamId === LINEAR_CMS_TEAM_ID) {
+        const scored = scoredPRs.find((s) => s.pr.number === prNum);
+        pickedUpPRs.push({
+          prNumber: prNum,
+          title: scored?.pr.title ?? `PR #${prNum}`,
+          identifier: summary.identifier,
+          status: summary.status,
+        });
+      }
     }
+
+    syncPreview = { newPRs, existingCount, pickedUpPRs };
+    console.log(`Sync preview: ${newPRs.length} new, ${existingCount} existing, ${pickedUpPRs.length} picked up by CMS.`);
+    if (pickedUpPRs.length > 0) {
+      console.log('Picked up by CMS:');
+      for (const p of pickedUpPRs) {
+        console.log(`  PR #${p.prNumber} → ${p.identifier} (${p.status})`);
+      }
+    }
+    if (newPRs.length > 0) {
+      console.log('New PRs to create:');
+      for (const s of newPRs) {
+        console.log(`  PR #${s.pr.number}: ${s.pr.title.slice(0, 70)}`);
+      }
+    }
+    console.log();
+  }
+
+  // Generate markdown report (includes sync preview if available)
+  const reportPath = `reports/triage-${new Date().toISOString().split('T')[0]}.md`;
+  generateMarkdownReport(scoredPRs, reportPath, syncPreview);
+  console.log(`Markdown report saved to: ${reportPath}\n`);
+
+  // Sync to Linear
+  if (doSync) {
+    if (dryRun) {
+      console.log('[DRY RUN] Skipping Linear sync.\n');
+    } else {
+      const confirmed = autoYes || await confirm(`About to sync ${scoredPRs.length} PRs to Linear. Proceed? (y/N) `);
+      if (confirmed) {
+        console.log('Fetching recently merged PRs...');
+        const mergedPRNumbers = fetchRecentlyMergedPRNumbers();
+        console.log(`Found ${mergedPRNumbers.size} recently merged PRs.\n`);
+        console.log('Syncing to Linear...');
+        const stats = await syncToLinear(scoredPRs, mergedPRNumbers);
+        console.log(`Linear sync complete: ${stats.created} created, ${stats.updated} updated, ${stats.closed} closed, ${stats.relationsCreated} relations linked.\n`);
+      } else {
+        console.log('Sync canceled.\n');
+      }
+    }
+  }
+
+  // Project update
+  if (doUpdate) {
     console.log('Fetching recently merged PRs...');
     const mergedPRNumbers = fetchRecentlyMergedPRNumbers();
     console.log(`Found ${mergedPRNumbers.size} recently merged PRs.\n`);
-    console.log('Syncing to Linear...');
-    const stats = await syncToLinear(scoredPRs, mergedPRNumbers);
-    console.log(`Linear sync complete: ${stats.created} created, ${stats.updated} updated, ${stats.closed} closed, ${stats.relationsCreated} relations linked.\n`);
+
+    if (dryRun) {
+      await generateProjectUpdate(scoredPRs, mergedPRNumbers, true);
+    } else {
+      const confirmed = autoYes || await confirm('Post project update to Linear? (y/N) ');
+      if (confirmed) {
+        await generateProjectUpdate(scoredPRs, mergedPRNumbers, false);
+      } else {
+        console.log('Project update skipped.\n');
+      }
+    }
   }
 }
 
