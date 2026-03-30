@@ -138,7 +138,7 @@ export async function findAIRelations(
       if (prNum) prIssueIds.add(issue.id);
     }
     hasNext = result.pageInfo.hasNextPage;
-    cursor = result.pageInfo.endCursor;
+    cursor = result.pageInfo.endCursor ?? undefined;
   }
 
   let processed = 0;
@@ -296,7 +296,7 @@ export async function syncAIRelations(
       if (prNum) prLinearIds.set(prNum, issue.id);
     }
     hasNext = result.pageInfo.hasNextPage;
-    cursor = result.pageInfo.endCursor;
+    cursor = result.pageInfo.endCursor ?? undefined;
   }
 
   for (const [prNum, relations] of aiRelations) {

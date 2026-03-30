@@ -14,10 +14,12 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@actions/core": "^3.0.0",
     "@anthropic-ai/sdk": "^0.78.0",
-    "@linear/sdk": "^37.0.0"
+    "@linear/sdk": "^80.0.0"
   },
   "devDependencies": {
+    "@types/node": "^25.5.0",
     "dotenv": "^16.4.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",

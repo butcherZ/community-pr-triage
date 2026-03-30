@@ -5,7 +5,7 @@ import type { ScoredPR } from '../types.js';
 const makeScoredPR = (overrides: Partial<ScoredPR> = {}): ScoredPR => ({
   pr: {
     number: 1, title: 'test', author: 'user', body: '', labels: ['pr: fix'],
-    additions: 10, deletions: 5, changedFiles: 1, createdAt: new Date().toISOString(),
+    additions: 10, deletions: 5, changedFiles: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     state: 'open', isDraft: false, mergedAt: null, closedAt: null, ciStatus: 'passing', files: [],
   },
   linkedIssues: [],

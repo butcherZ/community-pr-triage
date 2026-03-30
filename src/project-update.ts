@@ -1,14 +1,28 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { LinearClient } from '@linear/sdk';
-import {
-  LINEAR_CPR_TEAM_ID,
-  LINEAR_CMS_TEAM_ID,
-  LINEAR_PROJECT_ID,
-} from './config.js';
+import { LinearClient, ProjectUpdateHealthType } from '@linear/sdk';
+import { LINEAR_CPR_TEAM_ID, LINEAR_CMS_TEAM_ID, LINEAR_PROJECT_ID } from './config.js';
 import { matchPRNumber, fetchExistingPRSummary } from './syncer.js';
 import type { PRTicketSummary } from './syncer.js';
 import type { ScoredPR } from './types.js';
+
+// --- Linear helpers ---
+
+export async function fetchLastProjectUpdateDate(
+  client: LinearClient
+): Promise<Date | undefined> {
+  try {
+    const project = await client.project(LINEAR_PROJECT_ID);
+    const updates = await project.projectUpdates({ first: 10 });
+    if (updates.nodes.length === 0) return undefined;
+    const sorted = [...updates.nodes].sort(
+      (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
+    );
+    return sorted[0].createdAt;
+  } catch {
+    return undefined;
+  }
+}
 
 // --- Types ---
 
@@ -17,6 +31,7 @@ interface ProjectUpdateCategory {
   merged: { prNumber: number; title: string; identifier: string }[];
   inProgress: { prNumber: number; title: string; identifier: string; status: string }[];
   newPRs: ScoredPR[];
+  newSinceLastUpdate: ScoredPR[];
   closed: { prNumber: number; title: string; identifier: string }[];
   stale: { prNumber: number; title: string; identifier: string; ageDays: number }[];
 }
@@ -27,12 +42,14 @@ export function categorizeTickets(
   scoredPRs: ScoredPR[],
   mergedPRNumbers: Set<number>,
   prSummary: Map<number, PRTicketSummary>,
+  lastUpdateDate?: Date
 ): ProjectUpdateCategory {
   const categories: ProjectUpdateCategory = {
     pickedUp: [],
     merged: [],
     inProgress: [],
     newPRs: [],
+    newSinceLastUpdate: [],
     closed: [],
     stale: [],
   };
@@ -77,9 +94,7 @@ export function categorizeTickets(
         });
       } else {
         // Check if stale (>14 days since the ticket was last updated in Linear)
-        const ageDays = Math.floor(
-          (Date.now() - summary.updatedAt.getTime()) / 86400000
-        );
+        const ageDays = Math.floor((Date.now() - summary.updatedAt.getTime()) / 86400000);
         if (ageDays > 14) {
           categories.stale.push({
             prNumber: prNum,
@@ -97,6 +112,17 @@ export function categorizeTickets(
     if (!prSummary.has(scored.pr.number)) {
       categories.newPRs.push(scored);
     }
+  }
+
+  // PRs whose CPR ticket was created since the last project update
+  if (lastUpdateDate) {
+    for (const scored of scoredPRs) {
+      const summary = prSummary.get(scored.pr.number);
+      if (summary && summary.teamId === LINEAR_CPR_TEAM_ID && summary.createdAt > lastUpdateDate) {
+        categories.newSinceLastUpdate.push(scored);
+      }
+    }
+    categories.newSinceLastUpdate.sort((a, b) => b.value.total - a.value.total);
   }
 
   // Sort stale by age descending
@@ -122,11 +148,20 @@ export function selectSprintPRs(scoredPRs: ScoredPR[], count = 10): ScoredPR[] {
   const sorted = [...scoredPRs].sort((a, b) => b.value.total - a.value.total);
 
   // 1. Urgent/high priority (4-5 slots)
-  pick(sorted.filter((p) => p.priority === 'urgent' || p.priority === 'high'), 5);
+  pick(
+    sorted.filter((p) => p.priority === 'urgent' || p.priority === 'high'),
+    5
+  );
   // 2. Quick wins (3-4 slots)
-  pick(sorted.filter((p) => p.isQuickWin), 4);
+  pick(
+    sorted.filter((p) => p.isQuickWin),
+    4
+  );
   // 3. Enhancements/features (1-2 slots)
-  pick(sorted.filter((p) => p.prType === 'enhancement' || p.prType === 'feature'), 2);
+  pick(
+    sorted.filter((p) => p.prType === 'enhancement' || p.prType === 'feature'),
+    2
+  );
   // Fill remaining
   if (selected.length < count) pick(sorted, count - selected.length);
 
@@ -136,7 +171,7 @@ export function selectSprintPRs(scoredPRs: ScoredPR[], count = 10): ScoredPR[] {
 function formatSprintSection(
   sprintPRs: ScoredPR[],
   totalPRs: number,
-  linearUrls: Map<number, string>,
+  linearUrls: Map<number, string>
 ): string {
   const grouped = new Map<string, ScoredPR[]>();
   for (const pr of sprintPRs) {
@@ -147,7 +182,9 @@ function formatSprintSection(
 
   const urgent = sprintPRs.filter((p) => p.priority === 'urgent' || p.priority === 'high').length;
   const quickWins = sprintPRs.filter((p) => p.isQuickWin).length;
-  const features = sprintPRs.filter((p) => p.prType === 'enhancement' || p.prType === 'feature').length;
+  const features = sprintPRs.filter(
+    (p) => p.prType === 'enhancement' || p.prType === 'feature'
+  ).length;
 
   let md = `### Sprint Recommendation\n\n`;
   md += `Selected **${sprintPRs.length}** PRs from **${totalPRs}** open community PRs.\n`;
@@ -163,7 +200,8 @@ function formatSprintSection(
       if (pr.priority === 'urgent') tags.push('🔴 urgent');
       else if (pr.priority === 'high') tags.push('🟠 high');
       if (pr.isQuickWin) tags.push('⚡ quick win');
-      const ciIcon = pr.pr.ciStatus === 'passing' ? '✅' : pr.pr.ciStatus === 'failing' ? '❌' : '⏳';
+      const ciIcon =
+        pr.pr.ciStatus === 'passing' ? '✅' : pr.pr.ciStatus === 'failing' ? '❌' : '⏳';
       const linearUrl = linearUrls.get(pr.pr.number);
       const ticketRef = linearUrl ? ` · ${linearUrl}` : '';
 
@@ -180,23 +218,63 @@ function formatSprintSection(
 
 export function formatProjectUpdate(
   categories: ProjectUpdateCategory,
-  totalPRs: number,
+  scoredPRs: ScoredPR[],
   sprintPRs?: ScoredPR[],
-  linearUrls?: Map<number, string>,
+  linearUrls?: Map<number, string>
 ): string {
   const date = new Date().toISOString().split('T')[0];
+  const totalPRs = scoredPRs.length;
+
+  const quickWins = scoredPRs.filter((p) => p.isQuickWin).length;
+  const stale60d = scoredPRs.filter(
+    (p) => (Date.now() - new Date(p.pr.createdAt).getTime()) / 86400000 > 60
+  ).length;
+  const passing = scoredPRs.filter((p) => p.pr.ciStatus === 'passing').length;
+  const failing = scoredPRs.filter((p) => p.pr.ciStatus === 'failing').length;
+  const pending = totalPRs - passing - failing;
+
+  const existingCount =
+    totalPRs - categories.newSinceLastUpdate.length - categories.newPRs.length;
 
   let md = `## Community PR Project Update — ${date}\n\n`;
 
+  // Header stats
+  md += `**Date:** ${date}  \n`;
+  md += `**Total PRs:** ${totalPRs} | **Quick Wins:** ${quickWins} | **Stale (>60d):** ${stale60d}  \n`;
+  md += `**CI:** ${passing} passing, ${failing} failing, ${pending} pending\n\n`;
+
+  // Sync Preview
+  md += `## Sync Preview\n\n`;
+  md += `**${categories.newSinceLastUpdate.length}** new | **${existingCount}** existing | **${categories.pickedUp.length}** picked up by CMS\n\n`;
+
   // Summary
-  md += `### Summary\n\n`;
+  md += `## Summary\n\n`;
   md += `- **${totalPRs}** open community PRs tracked\n`;
   md += `- **${categories.pickedUp.length}** picked up by CMS team\n`;
   md += `- **${categories.merged.length}** merged\n`;
   md += `- **${categories.inProgress.length}** in progress (CPR)\n`;
-  md += `- **${categories.newPRs.length}** new PRs awaiting triage\n`;
+  md += `- **${categories.newSinceLastUpdate.length}** new PRs awaiting triage (since last update)\n`;
   md += `- **${categories.closed.length}** closed (not merged)\n`;
   md += `- **${categories.stale.length}** stale (>14 days in Todo)\n\n`;
+
+  // New PRs since last update (before sprint recommendation)
+  if (categories.newSinceLastUpdate.length > 0) {
+    md += `## New PRs Since Last Update\n\n`;
+    md += `| PR | Title | Author | Type | Area | Size | CI | Value |\n`;
+    md += `|----|-------|--------|------|------|------|----|-------|\n`;
+    for (const pr of categories.newSinceLastUpdate) {
+      const loc = pr.pr.additions + pr.pr.deletions;
+      const size = loc < 50 ? 'S' : loc < 300 ? 'M' : loc < 1000 ? 'L' : 'XL';
+      const ci =
+        pr.pr.ciStatus === 'passing'
+          ? ':white_check_mark:'
+          : pr.pr.ciStatus === 'failing'
+            ? ':x:'
+            : ':hourglass:';
+      md += `| [#${pr.pr.number}](https://github.com/strapi/strapi/pull/${pr.pr.number}) | ${pr.pr.title} | ${pr.pr.author} | ${pr.prType} | ${pr.area} | ${size} | ${ci} | ${pr.value.total} |\n`;
+    }
+    md += '\n';
+  }
 
   // Sprint recommendation
   if (sprintPRs && sprintPRs.length > 0) {
@@ -269,7 +347,7 @@ export function formatProjectUpdate(
 export async function generateProjectUpdate(
   scoredPRs: ScoredPR[],
   mergedPRNumbers: Set<number>,
-  dryRun: boolean,
+  dryRun: boolean
 ): Promise<string> {
   const apiKey = process.env.LINEAR_API_KEY;
   if (!apiKey) throw new Error('LINEAR_API_KEY environment variable is required');
@@ -277,9 +355,18 @@ export async function generateProjectUpdate(
   const client = new LinearClient({ apiKey });
 
   console.log('Fetching Linear ticket state for project update...');
-  const prSummary = await fetchExistingPRSummary(client);
+  const [prSummary, lastUpdateDate] = await Promise.all([
+    fetchExistingPRSummary(client),
+    fetchLastProjectUpdateDate(client),
+  ]);
 
-  const categories = categorizeTickets(scoredPRs, mergedPRNumbers, prSummary);
+  if (lastUpdateDate) {
+    console.log(`Last project update: ${lastUpdateDate.toISOString().split('T')[0]}`);
+  } else {
+    console.log('No previous project update found — all tickets treated as existing.');
+  }
+
+  const categories = categorizeTickets(scoredPRs, mergedPRNumbers, prSummary, lastUpdateDate);
 
   // Sprint recommendation: select top PRs and look up their Linear URLs
   const sprintPRs = selectSprintPRs(scoredPRs);
@@ -302,10 +389,10 @@ export async function generateProjectUpdate(
       }
     }
     hasNext = result.pageInfo.hasNextPage;
-    cursor = result.pageInfo.endCursor;
+    cursor = result.pageInfo.endCursor ?? undefined;
   }
 
-  const body = formatProjectUpdate(categories, scoredPRs.length, sprintPRs, linearUrls);
+  const body = formatProjectUpdate(categories, scoredPRs, sprintPRs, linearUrls);
 
   // Save markdown report
   const date = new Date().toISOString().split('T')[0];
@@ -349,7 +436,7 @@ export async function generateProjectUpdate(
   const updateResult = await client.createProjectUpdate({
     projectId: LINEAR_PROJECT_ID,
     body,
-    health: 'onTrack',
+    health: ProjectUpdateHealthType.OnTrack,
   });
 
   // Add sprint PR tickets to the project under the milestone
