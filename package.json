@@ -6,6 +6,7 @@
   "scripts": {
     "sync": "tsx src/index.ts --sync",
     "sync:dry": "tsx src/index.ts --sync --dry-run",
+    "check": "tsx src/index.ts --sync --dry-run --fresh",
     "update": "tsx src/index.ts --update",
     "update:dry": "tsx src/index.ts --update --dry-run",
     "all": "tsx src/index.ts --sync --update",

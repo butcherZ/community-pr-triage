@@ -40,7 +40,8 @@ cp .env.example .env
 | Command | What it does |
 |---------|-------------|
 | `pnpm run sync` | Fetch, score, preview sync stats, confirm, sync to Linear |
-| `pnpm run sync:dry` | Fetch, score, preview sync stats only |
+| `pnpm run sync:dry` | Preview sync stats from cache (no GitHub/Linear fetch) |
+| `pnpm run check` | Fresh GitHub+Linear comparison — shows exactly which PRs are missing without writing anything |
 | `pnpm run update` | Fetch, score, generate project update, confirm, post to Linear + create milestone |
 | `pnpm run update:dry` | Fetch, score, generate project update report only |
 | `pnpm run all` | Sync + project update (two confirmations) |
@@ -50,11 +51,14 @@ cp .env.example .env
 
 All commands accept `-y` / `--yes` to skip confirmations.
 
+> **Tip:** Use `pnpm run check` to diagnose partial syncs (e.g. after a rate-limit interruption) — it fetches live data from both GitHub and Linear and lists any PRs missing from Linear, without modifying anything.
+
 ### Flags
 
 - `--sync` — Sync tickets to Linear (create/update/close)
 - `--update` — Generate project update (status diff, sprint recommendation, milestone)
 - `--dry-run` — Preview only, no writes to Linear
+- `--fresh` — Force a live GitHub+Linear fetch even in dry-run mode (bypasses cache). Used by `check`.
 - `--yes` / `-y` — Skip confirmation prompts (useful for CI)
 
 Without `--sync` or `--update`, the tool fetches, scores, and prints a report only (equivalent to dry-run).
