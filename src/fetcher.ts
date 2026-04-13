@@ -75,8 +75,16 @@ function gh(args: string[]): string {
 export function fetchRecentlyMergedPRNumbers(): Set<number> {
   try {
     const raw = gh([
-      'pr', 'list', '--repo', REPO, '--state', 'merged',
-      '--limit', '200', '--json', 'number',
+      'pr',
+      'list',
+      '--repo',
+      REPO,
+      '--state',
+      'merged',
+      '--limit',
+      '200',
+      '--json',
+      'number',
     ]);
     const prs = JSON.parse(raw) as Array<{ number: number }>;
     return new Set(prs.map((pr) => pr.number));
@@ -86,19 +94,28 @@ export function fetchRecentlyMergedPRNumbers(): Set<number> {
 }
 
 export function fetchInternalAuthors(): Set<string> {
-  const raw = gh([
-    'api', `orgs/${STRAPI_ORG}/members`,
-    '--paginate',
-    '--jq', '.[].login',
-  ]);
+  const raw = gh(['api', `orgs/${STRAPI_ORG}/members`, '--paginate', '--jq', '.[].login']);
   const logins = raw.trim().split('\n').filter(Boolean);
   return new Set(logins);
 }
 
 export function fetchSinglePR(prNumber: number): GitHubPR {
   const fields = [
-    'number', 'title', 'author', 'body', 'labels', 'additions', 'deletions',
-    'changedFiles', 'createdAt', 'updatedAt', 'state', 'isDraft', 'mergedAt', 'closedAt', 'files',
+    'number',
+    'title',
+    'author',
+    'body',
+    'labels',
+    'additions',
+    'deletions',
+    'changedFiles',
+    'createdAt',
+    'updatedAt',
+    'state',
+    'isDraft',
+    'mergedAt',
+    'closedAt',
+    'files',
   ].join(',');
 
   const raw = gh(['pr', 'view', String(prNumber), '--repo', REPO, '--json', fields]);
@@ -127,11 +144,35 @@ export function fetchSinglePR(prNumber: number): GitHubPR {
 
 export function fetchCommunityPRs(internalAuthors: Set<string>): GitHubPR[] {
   const fields = [
-    'number', 'title', 'author', 'body', 'labels', 'additions', 'deletions',
-    'changedFiles', 'createdAt', 'updatedAt', 'state', 'isDraft', 'mergedAt', 'closedAt', 'files',
+    'number',
+    'title',
+    'author',
+    'body',
+    'labels',
+    'additions',
+    'deletions',
+    'changedFiles',
+    'createdAt',
+    'updatedAt',
+    'state',
+    'isDraft',
+    'mergedAt',
+    'closedAt',
+    'files',
   ].join(',');
 
-  const raw = gh(['pr', 'list', '--repo', REPO, '--state', 'open', '--limit', '500', '--json', fields]);
+  const raw = gh([
+    'pr',
+    'list',
+    '--repo',
+    REPO,
+    '--state',
+    'open',
+    '--limit',
+    '500',
+    '--json',
+    fields,
+  ]);
   const prs = JSON.parse(raw) as Array<Record<string, any>>;
 
   const communityPRs = prs
@@ -167,7 +208,7 @@ export function fetchCommunityPRs(internalAuthors: Set<string>): GitHubPR[] {
 
 export function fetchCIStatuses(
   prNumbers: number[],
-  batchSize = 25,
+  batchSize = 25
 ): Map<number, 'passing' | 'failing' | 'pending'> {
   const result = new Map<number, 'passing' | 'failing' | 'pending'>();
   const [owner, name] = REPO.split('/');
@@ -175,8 +216,9 @@ export function fetchCIStatuses(
   for (let i = 0; i < prNumbers.length; i += batchSize) {
     const batch = prNumbers.slice(i, i + batchSize);
     const aliases = batch
-      .map((num, idx) =>
-        `pr_${idx}: pullRequest(number: ${num}) {
+      .map(
+        (num, idx) =>
+          `pr_${idx}: pullRequest(number: ${num}) {
           number
           commits(last: 1) {
             nodes {
@@ -192,7 +234,8 @@ export function fetchCIStatuses(
               }
             }
           }
-        }`)
+        }`
+      )
       .join('\n');
 
     const query = `query {
@@ -220,7 +263,12 @@ export function fetchCIStatuses(
           const state = ctx.state;
           return {
             status: state === 'PENDING' ? 'IN_PROGRESS' : 'COMPLETED',
-            conclusion: state === 'SUCCESS' ? 'SUCCESS' : state === 'FAILURE' || state === 'ERROR' ? 'FAILURE' : null,
+            conclusion:
+              state === 'SUCCESS'
+                ? 'SUCCESS'
+                : state === 'FAILURE' || state === 'ERROR'
+                  ? 'FAILURE'
+                  : null,
           };
         });
 
@@ -240,8 +288,10 @@ export function fetchCIStatuses(
 export async function fetchIssue(issueNumber: number): Promise<GitHubIssue | null> {
   try {
     const raw = gh([
-      'api', `repos/${REPO}/issues/${issueNumber}`,
-      '--jq', '{number: .number, title: .title, labels: [.labels[].name], thumbsUp: .reactions["+1"], comments: .comments, state: .state}',
+      'api',
+      `repos/${REPO}/issues/${issueNumber}`,
+      '--jq',
+      '{number: .number, title: .title, labels: [.labels[].name], thumbsUp: .reactions["+1"], comments: .comments, state: .state}',
     ]);
     return JSON.parse(raw);
   } catch {
@@ -256,11 +306,13 @@ export function parseLinkedIssueData(issue: GitHubIssue): LinkedIssueData {
   for (const label of issue.labels) {
     if (label === 'severity: critical') severity = 'critical';
     else if (label === 'severity: high' && severity !== 'critical') severity = 'high';
-    else if (label === 'severity: medium' && !['critical', 'high'].includes(severity)) severity = 'medium';
+    else if (label === 'severity: medium' && !['critical', 'high'].includes(severity))
+      severity = 'medium';
     else if (label === 'severity: low' && severity === 'none') severity = 'low';
 
     if (label === 'status: confirmed') status = 'confirmed';
-    else if (label === 'status: pending reproduction' && status !== 'confirmed') status = 'pending_repro';
+    else if (label === 'status: pending reproduction' && status !== 'confirmed')
+      status = 'pending_repro';
     else if (label === 'status: can not reproduce') status = 'cant_repro';
   }
 

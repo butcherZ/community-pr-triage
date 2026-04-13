@@ -45,9 +45,18 @@ describe('calculateValue', () => {
   });
 
   it('caps engagement at 40', () => {
-    const linked = [makeLinkedIssue({
-      issue: { number: 100, title: 'popular', labels: [], thumbsUp: 60, comments: 40, state: 'open' },
-    })];
+    const linked = [
+      makeLinkedIssue({
+        issue: {
+          number: 100,
+          title: 'popular',
+          labels: [],
+          thumbsUp: 60,
+          comments: 40,
+          state: 'open',
+        },
+      }),
+    ];
     const result = calculateValue(makePR({ labels: ['pr: fix'] }), linked, 0);
     expect(result.engagement).toBe(40);
   });
@@ -59,10 +68,7 @@ describe('calculateValue', () => {
   });
 
   it('uses highest severity when multiple issues linked', () => {
-    const linked = [
-      makeLinkedIssue({ severity: 'low' }),
-      makeLinkedIssue({ severity: 'high' }),
-    ];
+    const linked = [makeLinkedIssue({ severity: 'low' }), makeLinkedIssue({ severity: 'high' })];
     const result = calculateValue(makePR({ labels: ['pr: fix'] }), linked, 0);
     expect(result.severity).toBe(35);
   });

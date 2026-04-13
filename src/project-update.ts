@@ -8,16 +8,12 @@ import type { ScoredPR } from './types.js';
 
 // --- Linear helpers ---
 
-export async function fetchLastProjectUpdateDate(
-  client: LinearClient
-): Promise<Date | undefined> {
+export async function fetchLastProjectUpdateDate(client: LinearClient): Promise<Date | undefined> {
   try {
     const project = await client.project(LINEAR_PROJECT_ID);
     const updates = await project.projectUpdates({ first: 10 });
     if (updates.nodes.length === 0) return undefined;
-    const sorted = [...updates.nodes].sort(
-      (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
-    );
+    const sorted = [...updates.nodes].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     return sorted[0].createdAt;
   } catch {
     return undefined;

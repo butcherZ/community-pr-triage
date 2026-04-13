@@ -60,7 +60,7 @@ async function main() {
   let cachedSyncStats: { createdPRNumbers: number[] } | undefined;
 
   const updateOnly = doUpdate && !doSync;
-  const cache = (!forceFresh && (dryRun || updateOnly)) ? readCache() : null;
+  const cache = !forceFresh && (dryRun || updateOnly) ? readCache() : null;
 
   if (cache) {
     scoredPRs = cache.scoredPRs;
@@ -68,7 +68,9 @@ async function main() {
     cachedSyncStats = cache.syncStats;
     console.log(
       `Loaded ${scoredPRs.length} PRs from cache.` +
-        (cachedSyncStats ? ` Sync stats: ${cachedSyncStats.createdPRNumbers.length} created.` : '') +
+        (cachedSyncStats
+          ? ` Sync stats: ${cachedSyncStats.createdPRNumbers.length} created.`
+          : '') +
         '\n'
     );
   } else {
