@@ -67,7 +67,7 @@
       ],
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={ JSON.stringify({ response_type: \"ephemeral\", text: \"\" }) }",
+        "responseBody": "{\"response_type\":\"ephemeral\",\"text\":\"\"}",
         "options": {}
       }
     },
