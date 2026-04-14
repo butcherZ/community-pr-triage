@@ -67,7 +67,33 @@
       ],
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ JSON.stringify($json.slackResponse) }}",
+        "responseBody": "={ JSON.stringify({ response_type: \"ephemeral\", text: \"\" }) }",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-http-04-slack",
+      "name": "Post to #cms-team",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1130,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2",
+          "name": "Slack Bot"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ channel: '#cms-team', text: $('Build Message').first().json.slackResponse.text }) }}",
         "options": {}
       }
     }
@@ -100,6 +126,17 @@
         [
           {
             "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond to Webhook": {
+      "main": [
+        [
+          {
+            "node": "Post to #cms-team",
             "type": "main",
             "index": 0
           }
