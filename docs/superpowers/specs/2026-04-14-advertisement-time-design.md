@@ -33,7 +33,7 @@ Schedule (hourly, Mon-Fri 9-18 CET)
 - **Type:** Schedule
 - **Interval:** Every hour
 - **Days:** Monday–Friday only
-- **Hours:** 9:00–18:00 (9 triggers per day × 5 days = 45 slots/week)
+- **Hours:** 9:00–17:00 (fires on the hour; 9 triggers per day × 5 days = 45 slots/week)
 - **Timezone:** `Europe/Paris` (handles CET/CEST automatically)
 
 ### 2. Roll Dice (Code node)
