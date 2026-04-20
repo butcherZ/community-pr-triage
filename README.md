@@ -124,6 +124,30 @@ Add these as repository secrets in **Settings → Secrets → Actions**:
 
 `GITHUB_TOKEN` is provided automatically by GitHub Actions.
 
+## Building the action
+
+The GitHub Action runs from a compiled bundle (`dist/index.cjs`). The CI workflow builds this automatically, but if you're iterating locally or syncing changes to strapi you'll want to rebuild it:
+
+```bash
+# From the root of this repo
+pnpm install
+pnpm build
+# → outputs .github/actions/community-pr-triage/dist/index.cjs
+
+# Or from inside the action directory (e.g. after syncing to strapi)
+cd .github/actions/community-pr-triage
+npm install
+npm run build
+```
+
+The CLI (`pnpm run sync`, `update`, etc.) runs TypeScript directly via `tsx` and does **not** need a build step.
+
+To push changes from this repo into strapi's `feat/community-pr-triage` branch:
+
+```bash
+./sync-to-strapi.sh
+```
+
 ## How it works
 
 ```

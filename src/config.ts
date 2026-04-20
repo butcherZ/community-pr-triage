@@ -51,6 +51,9 @@ export const LINEAR_TRIAGE_LABELS: {
   ci: {},
 });
 
+export const NOTION_API_KEY = process.env.NOTION_API_KEY ?? '';
+export const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID ?? '';
+
 // All label IDs managed by automation — used to preserve manually-added labels during sync
 export const MANAGED_LABEL_IDS = new Set(
   [

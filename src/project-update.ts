@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { LinearClient, ProjectUpdateHealthType } from '@linear/sdk';
 import { LINEAR_CPR_TEAM_ID, LINEAR_CMS_TEAM_ID, LINEAR_PROJECT_ID } from './config.js';
 import { matchPRNumber, fetchExistingPRSummary } from './syncer.js';
+import { buildNotionBlocks, postToNotion } from './notion.js';
 import type { PRTicketSummary } from './syncer.js';
 import type { ScoredPR } from './types.js';
 
@@ -22,7 +23,7 @@ export async function fetchLastProjectUpdateDate(client: LinearClient): Promise<
 
 // --- Types ---
 
-interface ProjectUpdateCategory {
+export interface ProjectUpdateCategory {
   pickedUp: { prNumber: number; title: string; identifier: string; status: string }[];
   merged: { prNumber: number; title: string; identifier: string }[];
   inProgress: { prNumber: number; title: string; identifier: string; status: string }[];
@@ -345,6 +346,57 @@ export function formatProjectUpdate(
   return md;
 }
 
+export function formatShortProjectUpdate(
+  categories: ProjectUpdateCategory,
+  scoredPRs: ScoredPR[],
+  linearUrls: Map<number, string>,
+  notionUrl?: string
+): string {
+  const date = new Date().toISOString().split('T')[0];
+  const totalPRs = scoredPRs.length;
+  const quickWins = scoredPRs.filter((p) => p.isQuickWin).length;
+  const stale60d = scoredPRs.filter(
+    (p) => (Date.now() - new Date(p.pr.createdAt).getTime()) / 86400000 > 60
+  ).length;
+  const passing = scoredPRs.filter((p) => p.pr.ciStatus === 'passing').length;
+  const failing = scoredPRs.filter((p) => p.pr.ciStatus === 'failing').length;
+
+  let md = `## Community PR Update — ${date}\n\n`;
+  md += `**${totalPRs}** open PRs · **${quickWins}** ⚡ quick wins · **${stale60d}** stale (>60d)  \n`;
+  md += `CI: **${passing}** ✅ · **${failing}** ❌\n\n`;
+
+  const changes: string[] = [];
+  if (categories.newSinceLastUpdate.length > 0)
+    changes.push(`**${categories.newSinceLastUpdate.length}** new`);
+  if (categories.merged.length > 0) changes.push(`**${categories.merged.length}** merged`);
+  if (categories.pickedUp.length > 0)
+    changes.push(`**${categories.pickedUp.length}** picked up by CMS`);
+  if (categories.closed.length > 0) changes.push(`**${categories.closed.length}** closed`);
+  if (changes.length > 0) md += changes.join(' · ') + '\n\n';
+
+  if (categories.newSinceLastUpdate.length > 0) {
+    md += `### 🆕 New Tickets (${categories.newSinceLastUpdate.length})\n\n`;
+    for (const pr of categories.newSinceLastUpdate) {
+      const linearUrl = linearUrls.get(pr.pr.number);
+      const ticketRef = linearUrl ? ` · [ticket](${linearUrl})` : '';
+      md += `- [**#${pr.pr.number}**](https://github.com/strapi/strapi/pull/${pr.pr.number}) ${pr.pr.title.slice(0, 70)} · @${pr.pr.author}${ticketRef}\n`;
+    }
+    md += '\n';
+  }
+
+  if (categories.pickedUp.length > 0) {
+    md += `### ↗️ Picked Up by CMS (${categories.pickedUp.length})\n\n`;
+    for (const p of categories.pickedUp) {
+      md += `- [**#${p.prNumber}**](https://github.com/strapi/strapi/pull/${p.prNumber}) ${p.title.slice(0, 70)} · ${p.identifier}\n`;
+    }
+    md += '\n';
+  }
+
+  if (notionUrl) md += `[📊 Full report →](${notionUrl})\n`;
+
+  return md;
+}
+
 // --- I/O functions ---
 
 export async function generateProjectUpdate(
@@ -402,22 +454,33 @@ export async function generateProjectUpdate(
     cursor = result.pageInfo.endCursor ?? undefined;
   }
 
-  const body = formatProjectUpdate(categories, scoredPRs, sprintPRs, linearUrls);
+  const fullBody = formatProjectUpdate(categories, scoredPRs, sprintPRs, linearUrls);
 
-  // Save markdown report
+  // Save full markdown report locally
   const date = new Date().toISOString().split('T')[0];
   const reportPath = `reports/update-${date}.md`;
   mkdirSync(dirname(reportPath), { recursive: true });
-  writeFileSync(reportPath, body);
+  writeFileSync(reportPath, fullBody);
   console.log(`Project update report saved to: ${reportPath}`);
 
-  // Print to console
-  console.log('\n' + body);
+  console.log('\n' + fullBody);
 
   if (dryRun) {
-    console.log('[DRY RUN] Skipping Linear project update post.\n');
+    console.log('[DRY RUN] Skipping Notion and Linear project update posts.\n');
     return reportPath;
   }
+
+  // Post full report to Notion
+  let notionUrl: string | undefined;
+  try {
+    const notionBlocks = buildNotionBlocks(scoredPRs, categories, sprintPRs, linearUrls);
+    notionUrl = await postToNotion(`Community PR Update — ${date}`, notionBlocks);
+    if (notionUrl) console.log(`Full report posted to Notion: ${notionUrl}`);
+  } catch (err) {
+    console.warn(`Notion post failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+  }
+
+  const body = formatShortProjectUpdate(categories, scoredPRs, linearUrls, notionUrl);
 
   // Find or create a milestone for this sprint (2-week target)
   const targetDate = new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0];
